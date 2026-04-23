@@ -34,7 +34,7 @@ def send_message(chat_id, text):
 @app.route("/sync", methods=["POST", "OPTIONS"])
 def sync():
     if request.method == "OPTIONS":
-        return "", 200  # предварительный запрос
+        return "", 200
     data = request.json
     chat_id = str(data.get("chat_id"))
     if not chat_id:
@@ -43,6 +43,7 @@ def sync():
     settings = load_settings()
     if chat_id not in settings:
         settings[chat_id] = {}
+
     if data.get("type") == "settings":
         settings[chat_id]["daily_enabled"] = data.get("dailyEnabled", False)
         settings[chat_id]["daily_time"] = data.get("dailyTime", "19:00")
@@ -77,6 +78,14 @@ def cron():
                 user["last_weekly_week"] = current_week
                 save_settings(settings)
     return "OK", 200
+
+@app.route("/debug", methods=["GET"])
+def debug():
+    if not os.path.exists(DATA_FILE):
+        return jsonify({"error": "no data yet"}), 404
+    with open(DATA_FILE, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    return jsonify(data)
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
