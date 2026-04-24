@@ -1,7 +1,7 @@
 import os
 import json
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta
 import pytz
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -32,6 +32,16 @@ def send_message(chat_id, text):
     except Exception as e:
         print("Ошибка отправки:", e)
 
+# Преобразует время HH:MM в начало и конец диапазона (окно 5 минут)
+def get_window(time_str: str):
+    try:
+        hours, minutes = map(int, time_str.split(':'))
+        start = datetime(1,1,1, hours, minutes, 0)
+        end = start + timedelta(minutes=4)   # окно 5 минут (включительно до end)
+        return start.strftime("%H:%M"), end.strftime("%H:%M")
+    except:
+        return "00:00", "00:04"
+
 @app.route("/sync", methods=["POST", "OPTIONS"])
 def sync():
     if request.method == "OPTIONS":
@@ -45,12 +55,23 @@ def sync():
         settings[chat_id] = {}
     if data.get("type") == "settings":
         sett = data.get("settings", {})
+        daily_time = sett.get("dailyTime", "19:00")
+        weekly_time = sett.get("weeklyTime", "19:00")
+        # Сохраняем и время, и вычисленное окно
+        settings[chat_id]["daily_time"] = daily_time
+        daily_start, daily_end = get_window(daily_time)
+        settings[chat_id]["daily_start"] = daily_start
+        settings[chat_id]["daily_end"] = daily_end
         settings[chat_id]["daily_enabled"] = sett.get("dailyEnabled", False)
-        settings[chat_id]["daily_time"] = sett.get("dailyTime", "19:00")
         settings[chat_id]["weekly_enabled"] = sett.get("weeklyEnabled", False)
         settings[chat_id]["weekly_day"] = sett.get("weeklyDay", 6)
-        settings[chat_id]["weekly_time"] = sett.get("weeklyTime", "19:00")
+        settings[chat_id]["weekly_time"] = weekly_time
+        weekly_start, weekly_end = get_window(weekly_time)
+        settings[chat_id]["weekly_start"] = weekly_start
+        settings[chat_id]["weekly_end"] = weekly_end
         settings[chat_id]["last_weekly_week"] = 0
+        # Для ежедневных — храним дату последней отправки
+        settings[chat_id]["last_daily_date"] = ""
         save_settings(settings)
         return jsonify({"ok": True})
     else:
@@ -68,25 +89,33 @@ def test_send():
 def cron():
     now = datetime.now(TIMEZONE)
     current_time = now.strftime("%H:%M")
+    current_date = now.strftime("%Y-%m-%d")
     current_week = now.isocalendar()[1]
-    print(f"[CRON] Текущее время (МСК): {current_time}, неделя {current_week}")
+    print(f"[CRON] Текущее время (МСК): {current_time}, дата {current_date}, неделя {current_week}")
     settings = load_settings()
     for chat_id, user in settings.items():
         daily_enabled = user.get("daily_enabled")
-        daily_time = user.get("daily_time")
+        if daily_enabled:
+            daily_start = user.get("daily_start")
+            daily_end = user.get("daily_end")
+            last_daily = user.get("last_daily_date", "")
+            # Если текущее время внутри окна и сегодня ещё не отправляли
+            if daily_start <= current_time <= daily_end and last_daily != current_date:
+                print(f"[CRON] Отправка ежедневного напоминания для {chat_id} (окно {daily_start}-{daily_end})")
+                send_message(chat_id, "Привет 👋 не забудь отправить новые замеры!")
+                user["last_daily_date"] = current_date
+                save_settings(settings)
+            else:
+                if daily_start and daily_end:
+                    print(f"[CRON] {chat_id}: окно {daily_start}-{daily_end}, текущее {current_time}, last {last_daily}")
         weekly_enabled = user.get("weekly_enabled")
-        weekly_day = user.get("weekly_day")
-        weekly_time = user.get("weekly_time")
-        last_week = user.get("last_weekly_week", 0)
-        if daily_enabled and daily_time == current_time:
-            print(f"[CRON] Отправка ежедневного напоминания для {chat_id} в {current_time}")
-            send_message(chat_id, "Привет 👋 не забудь отправить новые замеры!")
-        else:
-            if daily_enabled:
-                print(f"[CRON] {chat_id}: время {daily_time} не совпадает с {current_time}")
         if weekly_enabled:
-            if now.weekday() == weekly_day and weekly_time == current_time and last_week != current_week:
-                print(f"[CRON] Отправка еженедельной сводки для {chat_id} (день {weekly_day}, время {weekly_time})")
+            weekly_start = user.get("weekly_start")
+            weekly_end = user.get("weekly_end")
+            weekly_day = user.get("weekly_day")
+            last_week = user.get("last_weekly_week", 0)
+            if now.weekday() == weekly_day and weekly_start <= current_time <= weekly_end and last_week != current_week:
+                print(f"[CRON] Отправка еженедельной сводки для {chat_id} (день {weekly_day}, окно {weekly_start}-{weekly_end})")
                 send_message(chat_id, "📊 Настало время подвести итоги недели. Открой приложение, чтобы увидеть сводку!")
                 user["last_weekly_week"] = current_week
                 save_settings(settings)
