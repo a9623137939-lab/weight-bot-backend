@@ -32,15 +32,14 @@ def send_message(chat_id, text):
     except Exception as e:
         print("Ошибка отправки:", e)
 
-# Преобразует время HH:MM в начало и конец диапазона (окно 5 минут)
 def get_window(time_str: str):
     try:
         hours, minutes = map(int, time_str.split(':'))
         start = datetime(1,1,1, hours, minutes, 0)
-        end = start + timedelta(minutes=4)   # окно 5 минут (включительно до end)
+        end = start + timedelta(minutes=9)   # окно 10 минут (с included)
         return start.strftime("%H:%M"), end.strftime("%H:%M")
     except:
-        return "00:00", "00:04"
+        return "00:00", "00:09"
 
 @app.route("/sync", methods=["POST", "OPTIONS"])
 def sync():
@@ -57,7 +56,6 @@ def sync():
         sett = data.get("settings", {})
         daily_time = sett.get("dailyTime", "19:00")
         weekly_time = sett.get("weeklyTime", "19:00")
-        # Сохраняем и время, и вычисленное окно
         settings[chat_id]["daily_time"] = daily_time
         daily_start, daily_end = get_window(daily_time)
         settings[chat_id]["daily_start"] = daily_start
@@ -70,7 +68,6 @@ def sync():
         settings[chat_id]["weekly_start"] = weekly_start
         settings[chat_id]["weekly_end"] = weekly_end
         settings[chat_id]["last_weekly_week"] = 0
-        # Для ежедневных — храним дату последней отправки
         settings[chat_id]["last_daily_date"] = ""
         save_settings(settings)
         return jsonify({"ok": True})
@@ -99,15 +96,11 @@ def cron():
             daily_start = user.get("daily_start")
             daily_end = user.get("daily_end")
             last_daily = user.get("last_daily_date", "")
-            # Если текущее время внутри окна и сегодня ещё не отправляли
             if daily_start <= current_time <= daily_end and last_daily != current_date:
                 print(f"[CRON] Отправка ежедневного напоминания для {chat_id} (окно {daily_start}-{daily_end})")
                 send_message(chat_id, "Привет 👋 не забудь отправить новые замеры!")
                 user["last_daily_date"] = current_date
                 save_settings(settings)
-            else:
-                if daily_start and daily_end:
-                    print(f"[CRON] {chat_id}: окно {daily_start}-{daily_end}, текущее {current_time}, last {last_daily}")
         weekly_enabled = user.get("weekly_enabled")
         if weekly_enabled:
             weekly_start = user.get("weekly_start")
