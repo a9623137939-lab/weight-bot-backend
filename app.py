@@ -1,13 +1,16 @@
 import os
 import json
 import requests
+import threading
 from datetime import datetime
 import pytz
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+from telegram import Update
+from telegram.ext import Application, CommandHandler, ContextTypes
 
 app = Flask(__name__)
-CORS(app)  # разрешаем запросы с любых доменов
+CORS(app)
 
 BOT_TOKEN = "8251988176:AAGxBNYadM1PZiWH9TTHplCzjMaGS8dgkxE"
 BASE_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
@@ -31,6 +34,7 @@ def send_message(chat_id, text):
     except Exception as e:
         print("Ошибка отправки:", e)
 
+# ========== Flask эндпоинты ==========
 @app.route("/sync", methods=["POST", "OPTIONS"])
 def sync():
     if request.method == "OPTIONS":
@@ -86,6 +90,42 @@ def debug():
     with open(DATA_FILE, "r", encoding="utf-8") as f:
         data = json.load(f)
     return jsonify(data)
+
+# ========== Telegram бот (команды) ==========
+async def set_notify(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = str(update.effective_chat.id)
+    try:
+        daily_enabled = context.args[0].lower() == 'true'
+        daily_time = context.args[1]
+        weekly_enabled = context.args[2].lower() == 'true'
+        weekly_day = int(context.args[3])
+        weekly_time = context.args[4]
+    except (IndexError, ValueError):
+        await update.message.reply_text(
+            "❌ Используйте: /setnotify true 19:00 false 6 19:00\n"
+            "Где: daily_enabled(true/false) daily_time weekly_enabled weekly_day(0=пн...6=вс) weekly_time"
+        )
+        return
+    settings = load_settings()
+    if chat_id not in settings:
+        settings[chat_id] = {}
+    settings[chat_id]["daily_enabled"] = daily_enabled
+    settings[chat_id]["daily_time"] = daily_time
+    settings[chat_id]["weekly_enabled"] = weekly_enabled
+    settings[chat_id]["weekly_day"] = weekly_day
+    settings[chat_id]["weekly_time"] = weekly_time
+    settings[chat_id]["last_weekly_week"] = 0
+    save_settings(settings)
+    await update.message.reply_text("✅ Настройки уведомлений сохранены!")
+
+bot_app = Application.builder().token(BOT_TOKEN).build()
+bot_app.add_handler(CommandHandler("setnotify", set_notify))
+
+def run_telegram_bot():
+    bot_app.run_polling()
+
+# Запускаем бота в отдельном потоке, чтобы не мешать Flask
+threading.Thread(target=run_telegram_bot, daemon=True).start()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
