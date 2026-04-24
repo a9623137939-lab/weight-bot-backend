@@ -27,7 +27,8 @@ def save_settings(data):
 def send_message(chat_id, text):
     url = f"{BASE_URL}/sendMessage"
     try:
-        requests.post(url, json={"chat_id": chat_id, "text": text}, timeout=5)
+        r = requests.post(url, json={"chat_id": chat_id, "text": text}, timeout=5)
+        print(f"Отправка {chat_id}: {r.status_code} - {r.text}")
     except Exception as e:
         print("Ошибка отправки:", e)
 
@@ -68,15 +69,24 @@ def cron():
     now = datetime.now(TIMEZONE)
     current_time = now.strftime("%H:%M")
     current_week = now.isocalendar()[1]
+    print(f"[CRON] Текущее время (МСК): {current_time}, неделя {current_week}")
     settings = load_settings()
     for chat_id, user in settings.items():
-        if user.get("daily_enabled") and user.get("daily_time") == current_time:
+        daily_enabled = user.get("daily_enabled")
+        daily_time = user.get("daily_time")
+        weekly_enabled = user.get("weekly_enabled")
+        weekly_day = user.get("weekly_day")
+        weekly_time = user.get("weekly_time")
+        last_week = user.get("last_weekly_week", 0)
+        if daily_enabled and daily_time == current_time:
+            print(f"[CRON] Отправка ежедневного напоминания для {chat_id} в {current_time}")
             send_message(chat_id, "Привет 👋 не забудь отправить новые замеры!")
-        if user.get("weekly_enabled"):
-            weekly_day = user.get("weekly_day")
-            weekly_time = user.get("weekly_time")
-            last_week = user.get("last_weekly_week", 0)
+        else:
+            if daily_enabled:
+                print(f"[CRON] {chat_id}: время {daily_time} не совпадает с {current_time}")
+        if weekly_enabled:
             if now.weekday() == weekly_day and weekly_time == current_time and last_week != current_week:
+                print(f"[CRON] Отправка еженедельной сводки для {chat_id} (день {weekly_day}, время {weekly_time})")
                 send_message(chat_id, "📊 Настало время подвести итоги недели. Открой приложение, чтобы увидеть сводку!")
                 user["last_weekly_week"] = current_week
                 save_settings(settings)
