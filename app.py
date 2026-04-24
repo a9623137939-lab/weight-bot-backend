@@ -1,13 +1,10 @@
 import os
 import json
 import requests
-import threading
 from datetime import datetime
 import pytz
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
 
 app = Flask(__name__)
 CORS(app)
@@ -34,7 +31,6 @@ def send_message(chat_id, text):
     except Exception as e:
         print("Ошибка отправки:", e)
 
-# ========== Flask эндпоинты ==========
 @app.route("/sync", methods=["POST", "OPTIONS"])
 def sync():
     if request.method == "OPTIONS":
@@ -43,24 +39,29 @@ def sync():
     chat_id = str(data.get("chat_id"))
     if not chat_id:
         return jsonify({"error": "no chat_id"}), 400
-
     settings = load_settings()
     if chat_id not in settings:
         settings[chat_id] = {}
-
     if data.get("type") == "settings":
-        settings[chat_id]["daily_enabled"] = data.get("dailyEnabled", False)
-        settings[chat_id]["daily_time"] = data.get("dailyTime", "19:00")
-        settings[chat_id]["weekly_enabled"] = data.get("weeklyEnabled", False)
-        settings[chat_id]["weekly_day"] = data.get("weeklyDay", 6)
-        settings[chat_id]["weekly_time"] = data.get("weeklyTime", "19:00")
-        settings[chat_id]["last_weekly_week"] = data.get("last_weekly_week", 0)
+        sett = data.get("settings", {})
+        settings[chat_id]["daily_enabled"] = sett.get("dailyEnabled", False)
+        settings[chat_id]["daily_time"] = sett.get("dailyTime", "19:00")
+        settings[chat_id]["weekly_enabled"] = sett.get("weeklyEnabled", False)
+        settings[chat_id]["weekly_day"] = sett.get("weeklyDay", 6)
+        settings[chat_id]["weekly_time"] = sett.get("weeklyTime", "19:00")
+        settings[chat_id]["last_weekly_week"] = 0
         save_settings(settings)
-        return jsonify({"ok": True})
-    elif data.get("type") == "ping":
         return jsonify({"ok": True})
     else:
         return jsonify({"error": "unknown type"}), 400
+
+@app.route("/test_send", methods=["GET"])
+def test_send():
+    chat_id = request.args.get("chat_id")
+    if not chat_id:
+        return "❌ Укажите chat_id", 400
+    send_message(chat_id, "🎉 Тестовое уведомление от основного бота! Всё работает!")
+    return "✅ Сообщение отправлено!"
 
 @app.route("/cron", methods=["GET"])
 def cron():
@@ -68,12 +69,10 @@ def cron():
     current_time = now.strftime("%H:%M")
     current_week = now.isocalendar()[1]
     settings = load_settings()
-
     for chat_id, user in settings.items():
         if user.get("daily_enabled") and user.get("daily_time") == current_time:
             send_message(chat_id, "Привет 👋 не забудь отправить новые замеры!")
-        weekly_enabled = user.get("weekly_enabled")
-        if weekly_enabled:
+        if user.get("weekly_enabled"):
             weekly_day = user.get("weekly_day")
             weekly_time = user.get("weekly_time")
             last_week = user.get("last_weekly_week", 0)
@@ -90,42 +89,6 @@ def debug():
     with open(DATA_FILE, "r", encoding="utf-8") as f:
         data = json.load(f)
     return jsonify(data)
-
-# ========== Telegram бот (команды) ==========
-async def set_notify(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = str(update.effective_chat.id)
-    try:
-        daily_enabled = context.args[0].lower() == 'true'
-        daily_time = context.args[1]
-        weekly_enabled = context.args[2].lower() == 'true'
-        weekly_day = int(context.args[3])
-        weekly_time = context.args[4]
-    except (IndexError, ValueError):
-        await update.message.reply_text(
-            "❌ Используйте: /setnotify true 19:00 false 6 19:00\n"
-            "Где: daily_enabled(true/false) daily_time weekly_enabled weekly_day(0=пн...6=вс) weekly_time"
-        )
-        return
-    settings = load_settings()
-    if chat_id not in settings:
-        settings[chat_id] = {}
-    settings[chat_id]["daily_enabled"] = daily_enabled
-    settings[chat_id]["daily_time"] = daily_time
-    settings[chat_id]["weekly_enabled"] = weekly_enabled
-    settings[chat_id]["weekly_day"] = weekly_day
-    settings[chat_id]["weekly_time"] = weekly_time
-    settings[chat_id]["last_weekly_week"] = 0
-    save_settings(settings)
-    await update.message.reply_text("✅ Настройки уведомлений сохранены!")
-
-bot_app = Application.builder().token(BOT_TOKEN).build()
-bot_app.add_handler(CommandHandler("setnotify", set_notify))
-
-def run_telegram_bot():
-    bot_app.run_polling()
-
-# Запускаем бота в отдельном потоке, чтобы не мешать Flask
-threading.Thread(target=run_telegram_bot, daemon=True).start()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
